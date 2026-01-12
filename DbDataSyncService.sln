@@ -2,6 +2,10 @@
 Microsoft Visual Studio Solution File, Format Version 12.00
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DbDataSyncService", "DbDataSyncService.csproj", "{DB536C4F-EE75-4C8C-BF06-1FFA07D1B011}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SyncA.Console", "src/SyncA.Console/SyncA.Console.csproj", "{42C0A750-09B4-4684-8323-418DBE6AACF6}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SyncB.Api", "src/SyncB.Api/SyncB.Api.csproj", "{1DC48D0D-D33C-4FB0-8109-42F00C90DF69}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -12,5 +16,13 @@ Global
 		{DB536C4F-EE75-4C8C-BF06-1FFA07D1B011}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{DB536C4F-EE75-4C8C-BF06-1FFA07D1B011}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{DB536C4F-EE75-4C8C-BF06-1FFA07D1B011}.Release|Any CPU.Build.0 = Release|Any CPU
+		{42C0A750-09B4-4684-8323-418DBE6AACF6}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{42C0A750-09B4-4684-8323-418DBE6AACF6}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{42C0A750-09B4-4684-8323-418DBE6AACF6}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{42C0A750-09B4-4684-8323-418DBE6AACF6}.Release|Any CPU.Build.0 = Release|Any CPU
+		{1DC48D0D-D33C-4FB0-8109-42F00C90DF69}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{1DC48D0D-D33C-4FB0-8109-42F00C90DF69}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{1DC48D0D-D33C-4FB0-8109-42F00C90DF69}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{1DC48D0D-D33C-4FB0-8109-42F00C90DF69}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal
