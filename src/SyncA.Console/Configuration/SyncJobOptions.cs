@@ -13,5 +13,5 @@ public sealed class SyncJobOptions
     /// <summary>
     /// 同步間隔（分鐘）
     /// </summary>
-    public int IntervalMinutes { get; init; } = 5;
+    public int IntervalSeconds { get; init; } = 10;
 }

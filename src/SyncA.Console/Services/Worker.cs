@@ -27,8 +27,8 @@ public sealed class Worker : BackgroundService
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation(
-            "SyncWorker 啟動，Interval={IntervalMinutes} 分鐘",
-            _options.IntervalMinutes);
+            "SyncWorker 啟動，Interval={IntervalSeconds} 秒",
+            _options.IntervalSeconds);
 
         // 啟動後先跑一次（可視需求移除）
         await RunOnceSafelyAsync(stoppingToken);
@@ -38,7 +38,7 @@ public sealed class Worker : BackgroundService
             try
             {
                 await Task.Delay(
-                    TimeSpan.FromMinutes(_options.IntervalMinutes),
+                    TimeSpan.FromSeconds(_options.IntervalSeconds),
                     stoppingToken);
             }
             catch (TaskCanceledException)
