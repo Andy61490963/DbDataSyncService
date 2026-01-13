@@ -1,32 +1,49 @@
+using System.Text.Json.Serialization;
+
 namespace DbDataSyncService.SyncA.Models;
 
-/// <summary>
-/// PDF 設定同步資料列，需與 dbo.PDFConfigSyncServiceConfig 欄位一致。
-/// </summary>
-public sealed class PdfConfigSyncRow
+public sealed class SyncApplyJsonRequest
+{
+    [JsonPropertyName("syncKey")]
+    public string SyncKey { get; set; } = string.Empty;
+
+    [JsonPropertyName("fromVersion")]
+    public long FromVersion { get; set; }
+
+    [JsonPropertyName("toVersion")]
+    public long ToVersion { get; set; }
+
+    [JsonPropertyName("tables")]
+    public List<SyncTablePayload> Tables { get; set; } = new();
+}
+
+public sealed class SyncTablePayload
+{
+    [JsonPropertyName("table")]
+    public string Table { get; set; } = string.Empty;
+
+    [JsonPropertyName("rows")]
+    public List<SyncRowPayload> Rows { get; set; } = new();
+}
+
+public sealed class SyncRowPayload
 {
     /// <summary>
-    /// 主鍵。
+    /// U=Upsert, D=Delete
     /// </summary>
-    public Guid Id { get; set; }
+    [JsonPropertyName("op")]
+    public string Op { get; set; } = "U";
 
     /// <summary>
-    /// 設定鍵值（範例欄位，請依實際資料表補齊）。
+    /// 主鍵物件，例如 { "ID": "guid" }
     /// </summary>
-    public string ConfigKey { get; set; } = string.Empty;
+    [JsonPropertyName("key")]
+    public Dictionary<string, string?> Key { get; set; } = new();
 
     /// <summary>
-    /// 設定內容（範例欄位，請依實際資料表補齊）。
+    /// 欄位資料物件，例如 { "Category": "...", "FileName": "..."}
+    /// Delete 時可為 null
     /// </summary>
-    public string? ConfigValue { get; set; }
-
-    /// <summary>
-    /// 啟用旗標（範例欄位，請依實際資料表補齊）。
-    /// </summary>
-    public bool IsEnabled { get; set; }
-
-    /// <summary>
-    /// 最後更新時間（範例欄位，請依實際資料表補齊）。
-    /// </summary>
-    public DateTime UpdatedAt { get; set; }
+    [JsonPropertyName("data")]
+    public Dictionary<string, string?>? Data { get; set; }
 }

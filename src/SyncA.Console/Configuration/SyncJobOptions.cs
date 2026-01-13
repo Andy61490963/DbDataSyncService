@@ -1,24 +1,17 @@
 namespace DbDataSyncService.SyncA.Configuration;
 
-/// <summary>
-/// 同步作業設定，描述來源資料庫與遠端 API 相關參數。
-/// </summary>
 public sealed class SyncJobOptions
 {
     public const string SectionName = "SyncJob";
 
-    /// <summary>
-    /// B 端 API 基底網址。
-    /// </summary>
-    public string TargetApiBaseUrl { get; set; } = "https://target-host";
+    public string TargetApiBaseUrl { get; init; } = string.Empty;
+
+    public string SyncKey { get; init; } = string.Empty;
+
+    public int BatchSize { get; init; } = 2000;
 
     /// <summary>
-    /// 同步識別鍵，對應 ZZ_SYNC_STATE.SyncKey。
+    /// 同步間隔（分鐘）
     /// </summary>
-    public string SyncKey { get; set; } = "dcmatev4.dbo.PDFConfigSyncServiceConfig";
-
-    /// <summary>
-    /// 每批次最大筆數，避免單次要求過大。
-    /// </summary>
-    public int BatchSize { get; set; } = 2000;
+    public int IntervalMinutes { get; init; } = 5;
 }

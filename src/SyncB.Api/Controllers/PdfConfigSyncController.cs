@@ -48,13 +48,8 @@ public sealed class PdfConfigSyncController : ControllerBase
     /// 套用同步變更。
     /// </summary>
     [HttpPost("apply")]
-    public async Task<IActionResult> Apply([FromBody] SyncApplyRequest request, CancellationToken cancellationToken)
+    public async Task<IActionResult> Apply([FromBody] SyncApplyJsonRequest request, CancellationToken cancellationToken)
     {
-        if (request is null)
-        {
-            return BadRequest("同步請求不可為空");
-        }
-
         try
         {
             await _applyService.ApplyAsync(request, cancellationToken);

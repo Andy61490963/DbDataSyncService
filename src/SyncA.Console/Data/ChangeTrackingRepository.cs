@@ -1,8 +1,8 @@
-using System.Data;
+using System.Collections.Concurrent;
+using System.Globalization;
 using Dapper;
 using DbDataSyncService.SyncA.Models;
 using DbDataSyncService.SyncA.Utilities;
-using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Logging;
 
 namespace DbDataSyncService.SyncA.Data;
@@ -29,19 +29,17 @@ SELECT
 FROM Changes
 WHERE RN = 1;";
 
-    private const string RowLookupSql = @"/**/
-SELECT
-    ID AS Id,
-    ConfigKey,
-    ConfigValue,
-    IsEnabled,
-    UpdatedAt
-FROM dbo.PDFConfigSyncServiceConfig AS SRC
-INNER JOIN @Ids AS IDS
-    ON SRC.ID = IDS.Id;";
+    private const string ColumnLookupSql = @"/**/
+SELECT c.name
+FROM sys.columns AS c
+WHERE c.object_id = OBJECT_ID(@FullTableName)
+ORDER BY c.column_id;";
 
     private readonly ISqlConnectionFactory _connectionFactory;
     private readonly ILogger<ChangeTrackingRepository> _logger;
+
+    private static readonly ConcurrentDictionary<string, string[]> ColumnCache =
+        new(StringComparer.OrdinalIgnoreCase);
 
     public ChangeTrackingRepository(ISqlConnectionFactory connectionFactory, ILogger<ChangeTrackingRepository> logger)
     {
@@ -49,20 +47,15 @@ INNER JOIN @Ids AS IDS
         _logger = logger;
     }
 
-    /// <summary>
-    /// 取得目前資料庫 Change Tracking 版本。
-    /// </summary>
     public async Task<long> GetCurrentVersionAsync(CancellationToken cancellationToken)
     {
         await using var connection = _connectionFactory.CreateConnection();
         await connection.OpenAsync(cancellationToken);
+
         return await connection.ExecuteScalarAsync<long>(
             new CommandDefinition(CurrentVersionSql, cancellationToken: cancellationToken));
     }
 
-    /// <summary>
-    /// 取得指定版本之後的變更清單（僅保留每筆資料最新操作）。
-    /// </summary>
     public async Task<IReadOnlyList<ChangeRow>> GetChangesAsync(long lastVersion, CancellationToken cancellationToken)
     {
         await using var connection = _connectionFactory.CreateConnection();
@@ -84,16 +77,147 @@ INNER JOIN @Ids AS IDS
     }
 
     /// <summary>
-    /// 依據指定主鍵清單取得完整資料列。
+    /// 方案1：直接組成一包 JSON request（table 不帶 pk）
+    /// Key/Data 全部轉成 string?，避免 B 端 400。
     /// </summary>
-    public async Task<IReadOnlyList<PdfConfigSyncRow>> GetRowsByIdsAsync(
+    public async Task<SyncApplyJsonRequest?> BuildApplyRequestAsync(
+        string syncKey,
+        long fromVersion,
+        long toVersion,
+        string tableName,
+        string pkColumnName,
+        IReadOnlyCollection<Guid> upsertIds,
+        IReadOnlyCollection<Guid> deleteIds,
+        CancellationToken cancellationToken)
+    {
+        if ((upsertIds?.Count ?? 0) == 0 && (deleteIds?.Count ?? 0) == 0)
+        {
+            return null;
+        }
+
+        var columns = await GetColumnsAsync(tableName, cancellationToken);
+
+        if (!columns.Any(c => c.Equals(pkColumnName, StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new InvalidOperationException($"Table={tableName} 找不到 PK 欄位 {pkColumnName}");
+        }
+
+        // ✅ 這裡直接拿「字串版 rows」
+        var upsertRows = await GetRowsAsStringDictionariesByIdsAsync(
+            tableName,
+            pkColumnName,
+            columns,
+            upsertIds ?? Array.Empty<Guid>(),
+            cancellationToken);
+
+        var payloadTable = new SyncTablePayload
+        {
+            Table = tableName,
+            Rows = new List<SyncRowPayload>(upsertRows.Count + (deleteIds?.Count ?? 0))
+        };
+
+        foreach (var data in upsertRows)
+        {
+            // pkValue 現在是 string?
+            if (!data.TryGetValue(pkColumnName, out var pkValue) || string.IsNullOrWhiteSpace(pkValue))
+            {
+                throw new InvalidOperationException($"Table={tableName} 讀到資料列卻沒有 PK={pkColumnName}");
+            }
+
+            payloadTable.Rows.Add(new SyncRowPayload
+            {
+                Op = "U",
+                // ✅ Key 要 Dictionary<string, string?>
+                Key = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+                {
+                    [pkColumnName] = pkValue
+                },
+                // ✅ Data 要 Dictionary<string, string?>
+                Data = RemoveKeyColumn(data, pkColumnName)
+            });
+        }
+
+        foreach (var id in deleteIds ?? Array.Empty<Guid>())
+        {
+            payloadTable.Rows.Add(new SyncRowPayload
+            {
+                Op = "D",
+                Key = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+                {
+                    [pkColumnName] = id.ToString("D")
+                },
+                Data = null
+            });
+        }
+
+        return new SyncApplyJsonRequest
+        {
+            SyncKey = syncKey,
+            FromVersion = fromVersion,
+            ToVersion = toVersion,
+            Tables = new List<SyncTablePayload> { payloadTable }
+        };
+    }
+
+    private static Dictionary<string, string?> RemoveKeyColumn(
+        Dictionary<string, string?> source,
+        string pkColumnName)
+    {
+        var copy = new Dictionary<string, string?>(source, StringComparer.OrdinalIgnoreCase);
+        copy.Remove(pkColumnName);
+        return copy;
+    }
+
+    private async Task<string[]> GetColumnsAsync(string fullTableName, CancellationToken cancellationToken)
+    {
+        if (ColumnCache.TryGetValue(fullTableName, out var cached))
+        {
+            return cached;
+        }
+
+        await using var connection = _connectionFactory.CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+
+        var cols = (await connection.QueryAsync<string>(
+            new CommandDefinition(ColumnLookupSql, new { FullTableName = fullTableName }, cancellationToken: cancellationToken)))
+            .ToArray();
+
+        if (cols.Length == 0)
+        {
+            throw new InvalidOperationException($"找不到 Table schema：{fullTableName}");
+        }
+
+        ColumnCache[fullTableName] = cols;
+        _logger.LogInformation("載入欄位完成，Table={Table} Columns={Count}", fullTableName, cols.Length);
+
+        return cols;
+    }
+
+    /// <summary>
+    /// ✅ 從 DB 取資料列，並把每個欄位都轉成 string?（JSON 送出前就統一字串）
+    /// </summary>
+    private async Task<IReadOnlyList<Dictionary<string, string?>>> GetRowsAsStringDictionariesByIdsAsync(
+        string tableName,
+        string pkColumnName,
+        string[] columns,
         IReadOnlyCollection<Guid> ids,
         CancellationToken cancellationToken)
     {
         if (ids.Count == 0)
         {
-            return Array.Empty<PdfConfigSyncRow>();
+            return Array.Empty<Dictionary<string, string?>>();
         }
+
+        static string Quote(string name) => $"[{name.Replace("]", "]]")}]";
+
+        // ✅ 修正 ambiguous：所有欄位都指定來源 T，輸出欄位名保持原名
+        var selectList = string.Join(", ", columns.Select(c => $"T.{Quote(c)} AS {Quote(c)}"));
+
+        var sql = $@"/**/
+SELECT {selectList}
+FROM {tableName} AS T
+INNER JOIN @Ids AS I
+    ON I.Id = T.{Quote(pkColumnName)};";
 
         var tvp = TableValuedParameterBuilder.CreateGuidTable(ids);
         var parameters = new DynamicParameters();
@@ -102,9 +226,61 @@ INNER JOIN @Ids AS IDS
         await using var connection = _connectionFactory.CreateConnection();
         await connection.OpenAsync(cancellationToken);
 
-        var rows = await connection.QueryAsync<PdfConfigSyncRow>(
-            new CommandDefinition(RowLookupSql, parameters, cancellationToken: cancellationToken));
+        using var reader = await connection.ExecuteReaderAsync(
+            new CommandDefinition(sql, parameters, cancellationToken: cancellationToken));
 
-        return rows.ToList();
+        var result = new List<Dictionary<string, string?>>();
+
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var row = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+
+            for (var i = 0; i < reader.FieldCount; i++)
+            {
+                var name = reader.GetName(i);
+
+                if (await reader.IsDBNullAsync(i, cancellationToken))
+                {
+                    row[name] = null;
+                    continue;
+                }
+
+                var value = reader.GetValue(i);
+                row[name] = ToInvariantString(value);
+            }
+
+            result.Add(row);
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// ✅ 把 DB 值統一轉成 string（盡量用穩定格式，避免不同機器文化差異）
+    /// </summary>
+    private static string? ToInvariantString(object value)
+    {
+        return value switch
+        {
+            null => null,
+
+            // Guid 固定 D 格式
+            Guid g => g.ToString("D"),
+
+            // DateTime / DateTimeOffset 用 ISO 8601 Round-trip
+            DateTime dt => dt.Kind == DateTimeKind.Unspecified
+                ? DateTime.SpecifyKind(dt, DateTimeKind.Utc).ToString("O")
+                : dt.ToUniversalTime().ToString("O"),
+
+            DateTimeOffset dto => dto.ToUniversalTime().ToString("O"),
+
+            // bit
+            bool b => b ? "true" : "false",
+
+            // 數字用 invariant culture
+            IFormattable f => f.ToString(null, CultureInfo.InvariantCulture),
+
+            _ => value.ToString()
+        };
     }
 }

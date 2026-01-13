@@ -12,6 +12,9 @@ namespace DbDataSyncService.SyncA.Services;
 /// </summary>
 public sealed class SyncRunner
 {
+    private const string TargetTableName = "dbo.PDFConfigSyncServiceConfig";
+    private const string TargetPkColumnName = "ID";
+
     private readonly ChangeTrackingRepository _repository;
     private readonly SyncApiClient _apiClient;
     private readonly SyncJobOptions _options;
@@ -36,16 +39,14 @@ public sealed class SyncRunner
     {
         _logger.LogInformation("開始同步，SyncKey={SyncKey}", _options.SyncKey);
 
-        var state = await _apiClient.GetStateAsync(_options.SyncKey, cancellationToken);
-        if (state is null)
-        {
-            throw new InvalidOperationException("無法取得遠端同步水位");
-        }
+        var state = await _apiClient.GetStateAsync(_options.SyncKey, cancellationToken)
+                    ?? throw new InvalidOperationException("無法取得遠端同步水位");
 
         var currentVersion = await _repository.GetCurrentVersionAsync(cancellationToken);
         if (currentVersion <= state.LastVersion)
         {
-            _logger.LogInformation("目前無需同步，CurrentVersion={CurrentVersion} LastVersion={LastVersion}",
+            _logger.LogInformation(
+                "目前無需同步，CurrentVersion={CurrentVersion} LastVersion={LastVersion}",
                 currentVersion, state.LastVersion);
             return;
         }
@@ -54,7 +55,7 @@ public sealed class SyncRunner
         if (changes.Count == 0)
         {
             _logger.LogWarning(
-                "偵測到版本前進但無變更資料，可能超出 CT 保留範圍，請檢查 LastVersion={LastVersion} CurrentVersion={CurrentVersion}",
+                "偵測到版本前進但無變更資料，可能超出 CT 保留範圍，LastVersion={LastVersion} CurrentVersion={CurrentVersion}",
                 state.LastVersion, currentVersion);
             return;
         }
@@ -66,33 +67,40 @@ public sealed class SyncRunner
             var isLastBatch = index == batches.Count - 1;
 
             var upsertIds = batch
-                .Where(change => change.Operation == ChangeOperation.InsertOrUpdate)
-                .Select(change => change.Id)
+                .Where(x => x.Operation == ChangeOperation.InsertOrUpdate)
+                .Select(x => x.Id)
                 .ToList();
 
             var deleteIds = batch
-                .Where(change => change.Operation == ChangeOperation.Delete)
-                .Select(change => change.Id)
+                .Where(x => x.Operation == ChangeOperation.Delete)
+                .Select(x => x.Id)
                 .ToList();
 
-            var upserts = await _repository.GetRowsByIdsAsync(upsertIds, cancellationToken);
+            // 這裡改成：Repository 直接組好「一包 JSON request」
+            var request = await _repository.BuildApplyRequestAsync(
+                syncKey: _options.SyncKey,
+                fromVersion: state.LastVersion,
+                toVersion: isLastBatch ? currentVersion : state.LastVersion,
+                tableName: TargetTableName,
+                pkColumnName: TargetPkColumnName,
+                upsertIds: upsertIds,
+                deleteIds: deleteIds,
+                cancellationToken: cancellationToken);
 
-            var request = new SyncApplyRequest
+            if (request is null)
             {
-                SyncKey = _options.SyncKey,
-                FromVersion = state.LastVersion,
-                ToVersion = isLastBatch ? currentVersion : state.LastVersion,
-                Upserts = upserts,
-                Deletes = deleteIds
-            };
+                _logger.LogInformation("批次 {Index}/{Total} 無資料可送", index + 1, batches.Count);
+                continue;
+            }
 
             _logger.LogInformation(
                 "送出批次 {Index}/{Total}，Upserts={Upserts} Deletes={Deletes}",
                 index + 1,
                 batches.Count,
-                upserts.Count,
+                upsertIds.Count,
                 deleteIds.Count);
 
+            // 不再只送 upserts，送完整 request（含 deletes）
             await _apiClient.ApplyAsync(request, cancellationToken);
         }
 

@@ -36,7 +36,7 @@ public sealed class SyncApiClient
     /// <summary>
     /// 套用同步資料至 B 端。
     /// </summary>
-    public async Task ApplyAsync(SyncApplyRequest request, CancellationToken cancellationToken)
+    public async Task ApplyAsync(SyncApplyJsonRequest request, CancellationToken cancellationToken)
     {
         var response = await _httpClient.PostAsJsonAsync(
             "/api/sync/pdf-config/apply",
