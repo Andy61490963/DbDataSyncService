@@ -2,6 +2,7 @@ using Serilog;
 using DbDataSyncService.SyncA.Configuration;
 using DbDataSyncService.SyncA.Data;
 using DbDataSyncService.SyncA.Logging;
+using DbDataSyncService.SyncA.Models;
 using DbDataSyncService.SyncA.Services;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -33,6 +34,8 @@ public sealed class Program
                     // Infrastructure
                     services.AddSingleton<ISqlConnectionFactory, SqlConnectionFactory>();
                     services.AddSingleton<ChangeTrackingRepository>();
+                    services.AddSingleton<ISyncTableDefinition, PdfConfigSyncTableDefinition>();
+                    services.AddSingleton<SyncRequestBuilder>();
                     services.AddHttpClient<SyncApiClient>();
 
                     // Core logic

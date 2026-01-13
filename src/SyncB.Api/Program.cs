@@ -2,6 +2,7 @@ using DbDataSyncService.SyncB.Configuration;
 using DbDataSyncService.SyncB.Data;
 using DbDataSyncService.SyncB.Logging;
 using DbDataSyncService.SyncB.Services;
+using DbDataSyncService.SyncB.SyncDefinitions;
 using Serilog;
 
 namespace DbDataSyncService.SyncB;
@@ -24,6 +25,9 @@ public static class Program
 
             builder.Services.AddSingleton<ISqlConnectionFactory, SqlConnectionFactory>();
             builder.Services.AddScoped<SyncStateRepository>();
+            builder.Services.AddScoped<SyncStateStore>();
+            builder.Services.AddSingleton<ISyncTableDefinition, PdfConfigSyncTableDefinition>();
+            builder.Services.AddSingleton<SyncTableDefinitionRegistry>();
             builder.Services.AddScoped<SyncApplyService>();
 
             builder.Services.AddControllers();

@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Globalization;
 using Dapper;
 using DbDataSyncService.SyncA.Models;
 using DbDataSyncService.SyncA.Utilities;
@@ -47,6 +46,9 @@ ORDER BY c.column_id;";
         _logger = logger;
     }
 
+    /// <summary>
+    /// 取得目前 Change Tracking 版本。
+    /// </summary>
     public async Task<long> GetCurrentVersionAsync(CancellationToken cancellationToken)
     {
         await using var connection = _connectionFactory.CreateConnection();
@@ -56,6 +58,9 @@ ORDER BY c.column_id;";
             new CommandDefinition(CurrentVersionSql, cancellationToken: cancellationToken));
     }
 
+    /// <summary>
+    /// 取得指定版本之後的變更。
+    /// </summary>
     public async Task<IReadOnlyList<ChangeRow>> GetChangesAsync(long lastVersion, CancellationToken cancellationToken)
     {
         await using var connection = _connectionFactory.CreateConnection();
@@ -77,98 +82,9 @@ ORDER BY c.column_id;";
     }
 
     /// <summary>
-    /// 方案1：直接組成一包 JSON request（table 不帶 pk）
-    /// Key/Data 全部轉成 string?，避免 B 端 400。
+    /// 取得指定資料表欄位清單。
     /// </summary>
-    public async Task<SyncApplyJsonRequest?> BuildApplyRequestAsync(
-        string syncKey,
-        long fromVersion,
-        long toVersion,
-        string tableName,
-        string pkColumnName,
-        IReadOnlyCollection<Guid> upsertIds,
-        IReadOnlyCollection<Guid> deleteIds,
-        CancellationToken cancellationToken)
-    {
-        if ((upsertIds?.Count ?? 0) == 0 && (deleteIds?.Count ?? 0) == 0)
-        {
-            return null;
-        }
-
-        var columns = await GetColumnsAsync(tableName, cancellationToken);
-
-        if (!columns.Any(c => c.Equals(pkColumnName, StringComparison.OrdinalIgnoreCase)))
-        {
-            throw new InvalidOperationException($"Table={tableName} 找不到 PK 欄位 {pkColumnName}");
-        }
-
-        // ✅ 這裡直接拿「字串版 rows」
-        var upsertRows = await GetRowsAsStringDictionariesByIdsAsync(
-            tableName,
-            pkColumnName,
-            columns,
-            upsertIds ?? Array.Empty<Guid>(),
-            cancellationToken);
-
-        var payloadTable = new SyncTablePayload
-        {
-            Table = tableName,
-            Rows = new List<SyncRowPayload>(upsertRows.Count + (deleteIds?.Count ?? 0))
-        };
-
-        foreach (var data in upsertRows)
-        {
-            // pkValue 現在是 string?
-            if (!data.TryGetValue(pkColumnName, out var pkValue) || string.IsNullOrWhiteSpace(pkValue))
-            {
-                throw new InvalidOperationException($"Table={tableName} 讀到資料列卻沒有 PK={pkColumnName}");
-            }
-
-            payloadTable.Rows.Add(new SyncRowPayload
-            {
-                Op = "U",
-                // ✅ Key 要 Dictionary<string, string?>
-                Key = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
-                {
-                    [pkColumnName] = pkValue
-                },
-                // ✅ Data 要 Dictionary<string, string?>
-                Data = RemoveKeyColumn(data, pkColumnName)
-            });
-        }
-
-        foreach (var id in deleteIds ?? Array.Empty<Guid>())
-        {
-            payloadTable.Rows.Add(new SyncRowPayload
-            {
-                Op = "D",
-                Key = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
-                {
-                    [pkColumnName] = id.ToString("D")
-                },
-                Data = null
-            });
-        }
-
-        return new SyncApplyJsonRequest
-        {
-            SyncKey = syncKey,
-            FromVersion = fromVersion,
-            ToVersion = toVersion,
-            Tables = new List<SyncTablePayload> { payloadTable }
-        };
-    }
-
-    private static Dictionary<string, string?> RemoveKeyColumn(
-        Dictionary<string, string?> source,
-        string pkColumnName)
-    {
-        var copy = new Dictionary<string, string?>(source, StringComparer.OrdinalIgnoreCase);
-        copy.Remove(pkColumnName);
-        return copy;
-    }
-
-    private async Task<string[]> GetColumnsAsync(string fullTableName, CancellationToken cancellationToken)
+    public async Task<string[]> GetColumnsAsync(string fullTableName, CancellationToken cancellationToken)
     {
         if (ColumnCache.TryGetValue(fullTableName, out var cached))
         {
@@ -194,9 +110,9 @@ ORDER BY c.column_id;";
     }
 
     /// <summary>
-    /// ✅ 從 DB 取資料列，並把每個欄位都轉成 string?（JSON 送出前就統一字串）
+    /// 從 DB 取資料列，並把每個欄位都轉成 string?（JSON 送出前就統一字串）。
     /// </summary>
-    private async Task<IReadOnlyList<Dictionary<string, string?>>> GetRowsAsStringDictionariesByIdsAsync(
+    public async Task<IReadOnlyList<Dictionary<string, string?>>> GetRowsAsStringDictionariesByIdsAsync(
         string tableName,
         string pkColumnName,
         string[] columns,
@@ -245,42 +161,12 @@ INNER JOIN @Ids AS I
                     continue;
                 }
 
-                var value = reader.GetValue(i);
-                row[name] = ToInvariantString(value);
+                row[name] = InvariantValueConverter.ToInvariantString(reader.GetValue(i));
             }
 
             result.Add(row);
         }
 
         return result;
-    }
-
-    /// <summary>
-    /// ✅ 把 DB 值統一轉成 string（盡量用穩定格式，避免不同機器文化差異）
-    /// </summary>
-    private static string? ToInvariantString(object value)
-    {
-        return value switch
-        {
-            null => null,
-
-            // Guid 固定 D 格式
-            Guid g => g.ToString("D"),
-
-            // DateTime / DateTimeOffset 用 ISO 8601 Round-trip
-            DateTime dt => dt.Kind == DateTimeKind.Unspecified
-                ? DateTime.SpecifyKind(dt, DateTimeKind.Utc).ToString("O")
-                : dt.ToUniversalTime().ToString("O"),
-
-            DateTimeOffset dto => dto.ToUniversalTime().ToString("O"),
-
-            // bit
-            bool b => b ? "true" : "false",
-
-            // 數字用 invariant culture
-            IFormattable f => f.ToString(null, CultureInfo.InvariantCulture),
-
-            _ => value.ToString()
-        };
     }
 }

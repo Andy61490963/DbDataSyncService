@@ -12,22 +12,22 @@ namespace DbDataSyncService.SyncA.Services;
 /// </summary>
 public sealed class SyncRunner
 {
-    private const string TargetTableName = "dbo.PDFConfigSyncServiceConfig";
-    private const string TargetPkColumnName = "ID";
-
     private readonly ChangeTrackingRepository _repository;
     private readonly SyncApiClient _apiClient;
+    private readonly SyncRequestBuilder _requestBuilder;
     private readonly SyncJobOptions _options;
     private readonly ILogger<SyncRunner> _logger;
 
     public SyncRunner(
         ChangeTrackingRepository repository,
         SyncApiClient apiClient,
+        SyncRequestBuilder requestBuilder,
         IOptions<SyncJobOptions> options,
         ILogger<SyncRunner> logger)
     {
         _repository = repository;
         _apiClient = apiClient;
+        _requestBuilder = requestBuilder;
         _options = options.Value;
         _logger = logger;
     }
@@ -76,13 +76,10 @@ public sealed class SyncRunner
                 .Select(x => x.Id)
                 .ToList();
 
-            // 這裡改成：Repository 直接組好「一包 JSON request」
-            var request = await _repository.BuildApplyRequestAsync(
+            var request = await _requestBuilder.BuildAsync(
                 syncKey: _options.SyncKey,
                 fromVersion: state.LastVersion,
                 toVersion: isLastBatch ? currentVersion : state.LastVersion,
-                tableName: TargetTableName,
-                pkColumnName: TargetPkColumnName,
                 upsertIds: upsertIds,
                 deleteIds: deleteIds,
                 cancellationToken: cancellationToken);
