@@ -32,75 +32,81 @@ WHERE SyncKey = @SyncKey;";
     }
 
     public async Task ApplyAsync(SyncApplyJsonRequest request, CancellationToken cancellationToken)
+{
+    await using var connection = _connectionFactory.CreateConnection();
+    await connection.OpenAsync(cancellationToken);
+
+    await using var tx = await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
+
+    try
     {
-        await using var connection = _connectionFactory.CreateConnection();
-        await connection.OpenAsync(cancellationToken);
+        var currentState = await connection.QueryFirstOrDefaultAsync<SyncStateDto>(
+            new CommandDefinition(
+                StateLookupSql,
+                new { request.SyncKey },
+                transaction: tx,
+                cancellationToken: cancellationToken));
 
-        await using var tx = await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
+        if (currentState is null)
+            throw new InvalidOperationException($"找不到 SyncKey={request.SyncKey} 的同步水位");
 
-        try
+        if (request.FromVersion != currentState.LastVersion)
+            throw new InvalidOperationException(
+                $"同步版本不一致，FromVersion={request.FromVersion} LastVersion={currentState.LastVersion}");
+
+        if (request.ToVersion < request.FromVersion)
+            throw new InvalidOperationException(
+                $"同步版本範圍錯誤，FromVersion={request.FromVersion} ToVersion={request.ToVersion}");
+
+        // ✅ 改這裡：build 變成多批
+        var batches = SqlApplyCommandBuilder.BuildBatches(request, maxParameters: 1000);
+
+        var totalRows = 0;
+        for (var i = 0; i < batches.Count; i++)
         {
-            var currentState = await connection.QueryFirstOrDefaultAsync<SyncStateDto>(
-                new CommandDefinition(
-                    StateLookupSql,
-                    new { request.SyncKey },
-                    transaction: tx,
-                    cancellationToken: cancellationToken));
+            
+            var batch = batches[i];
+            totalRows += batch.RowCount;
 
-            if (currentState is null)
-            {
-                throw new InvalidOperationException($"找不到 SyncKey={request.SyncKey} 的同步水位");
-            }
-
-            if (request.FromVersion != currentState.LastVersion)
-            {
-                throw new InvalidOperationException(
-                    $"同步版本不一致，FromVersion={request.FromVersion} LastVersion={currentState.LastVersion}");
-            }
-
-            if (request.ToVersion < request.FromVersion)
-            {
-                throw new InvalidOperationException(
-                    $"同步版本範圍錯誤，FromVersion={request.FromVersion} ToVersion={request.ToVersion}");
-            }
-
-            // 這裡才是重點：用 JSON 組 SQL
-            var built = SqlApplyCommandBuilder.Build(request);
-
-            if (!string.IsNullOrWhiteSpace(built.Sql))
-            {
-                await connection.ExecuteAsync(
-                    new CommandDefinition(
-                        built.Sql,
-                        built.Parameters,
-                        transaction: tx,
-                        cancellationToken: cancellationToken));
-            }
+            _logger.LogInformation("Apply batch {Index}/{Total}: Rows={Rows}", i + 1, batches.Count, batch.RowCount);
+            
+            if (string.IsNullOrWhiteSpace(batch.Sql))
+                continue;
 
             await connection.ExecuteAsync(
                 new CommandDefinition(
-                    UpdateStateSql,
-                    new
-                    {
-                        request.SyncKey,
-                        LastVersion = request.ToVersion,
-                        LastRowCount = built.RowCount
-                    },
+                    batch.Sql,
+                    batch.Parameters,
                     transaction: tx,
                     cancellationToken: cancellationToken));
-
-            await tx.CommitAsync(cancellationToken);
-
-            _logger.LogInformation(
-                "同步套用成功(JSON→SQL)，SyncKey={SyncKey} ToVersion={ToVersion} Rows={RowCount}",
-                request.SyncKey,
-                request.ToVersion,
-                built.RowCount);
         }
-        catch
-        {
-            await tx.RollbackAsync(cancellationToken);
-            throw;
-        }
+
+        await connection.ExecuteAsync(
+            new CommandDefinition(
+                UpdateStateSql,
+                new
+                {
+                    request.SyncKey,
+                    LastVersion = request.ToVersion,
+                    LastRowCount = totalRows
+                },
+                transaction: tx,
+                cancellationToken: cancellationToken));
+
+        await tx.CommitAsync(cancellationToken);
+
+        _logger.LogInformation(
+            "同步套用成功(JSON→SQL Batches)，SyncKey={SyncKey} ToVersion={ToVersion} Rows={RowCount} Batches={Batches}",
+            request.SyncKey,
+            request.ToVersion,
+            totalRows,
+            batches.Count);
     }
+    catch
+    {
+        await tx.RollbackAsync(cancellationToken);
+        throw;
+    }
+}
+
 }
