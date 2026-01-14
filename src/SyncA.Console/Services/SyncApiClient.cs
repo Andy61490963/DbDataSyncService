@@ -29,7 +29,7 @@ public sealed class SyncApiClient
     /// </summary>
     public async Task<SyncStateResponse?> GetStateAsync(string syncKey, CancellationToken cancellationToken)
     {
-        var url = $"/api/sync/pdf-config/state?syncKey={Uri.EscapeDataString(syncKey)}";
+        var url = $"SyncB/api/sync/pdf-config/state?syncKey={Uri.EscapeDataString(syncKey)}";
         return await _httpClient.GetFromJsonAsync<SyncStateResponse>(url, cancellationToken);
     }
 
@@ -39,7 +39,7 @@ public sealed class SyncApiClient
     public async Task ApplyAsync(SyncApplyJsonRequest request, CancellationToken cancellationToken)
     {
         var response = await _httpClient.PostAsJsonAsync(
-            "/api/sync/pdf-config/apply",
+            "SyncB/api/sync/pdf-config/apply",
             request,
             cancellationToken);
 

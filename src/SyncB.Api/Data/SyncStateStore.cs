@@ -1,4 +1,5 @@
 using System.Data;
+using System.Data.Common;
 using Dapper;
 using DbDataSyncService.SyncB.Models;
 using Microsoft.Data.SqlClient;
@@ -28,7 +29,7 @@ WHERE SyncKey = @SyncKey;";
     /// </summary>
     public async Task<SyncStateDto?> GetStateAsync(
         SqlConnection connection,
-        SqlTransaction transaction,
+        DbTransaction transaction,
         string syncKey,
         CancellationToken cancellationToken)
     {
@@ -45,7 +46,7 @@ WHERE SyncKey = @SyncKey;";
     /// </summary>
     public async Task UpdateStateAsync(
         SqlConnection connection,
-        SqlTransaction transaction,
+        DbTransaction transaction,
         string syncKey,
         long lastVersion,
         int lastRowCount,
