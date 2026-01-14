@@ -9,6 +9,17 @@ using Microsoft.Extensions.Hosting;
 
 namespace DbDataSyncService.SyncA;
 
+/// <summary>
+/// 使用前請在來源端輸入 SQL 
+/// ALTER DATABASE [TESTA]
+/// SET CHANGE_TRACKING = ON
+///     (CHANGE_RETENTION = 7 DAYS, AUTO_CLEANUP = ON);
+///
+/// 
+/// ALTER TABLE dbo.PDFConfigSyncServiceConfig
+///     ENABLE CHANGE_TRACKING
+/// WITH (TRACK_COLUMNS_UPDATED = OFF);
+/// </summary>
 public sealed class Program
 {
     public static async Task Main(string[] args)
